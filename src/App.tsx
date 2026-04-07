@@ -379,6 +379,18 @@ const getAuthHeaders = async () => {
 
 const getSettingsMode = () => localStorage.getItem('settings_mode') === 'tool' ? 'tool' : 'gemini';
 
+const extractErrorMessage = async (response: Response, fallback: string) => {
+  const contentType = response.headers.get('content-type') || '';
+
+  if (contentType.includes('application/json')) {
+    const errorData = await response.json().catch(() => ({}));
+    return errorData.error || fallback;
+  }
+
+  const text = await response.text().catch(() => '');
+  return text || fallback;
+};
+
 const apiGenerateContent = async (payload: any, userApiKey: string, baseUrl?: string, customModel?: string) => {
   const authHeaders = await getAuthHeaders();
   const response = await fetch('/api/generate-content', {
@@ -388,8 +400,8 @@ const apiGenerateContent = async (payload: any, userApiKey: string, baseUrl?: st
   });
   
   if (!response.ok) {
-    const errorData = await response.json();
-    throw new Error(errorData.error || '生成内容失败');
+    const errorMessage = await extractErrorMessage(response, '生成内容失败');
+    throw new Error(errorMessage);
   }
   
   return await response.json();
@@ -404,8 +416,8 @@ const apiGenerateVideos = async (payload: any, userApiKey: string, baseUrl?: str
   });
   
   if (!response.ok) {
-    const errorData = await response.json();
-    throw new Error(errorData.error || '生成视频失败');
+    const errorMessage = await extractErrorMessage(response, '生成视频失败');
+    throw new Error(errorMessage);
   }
   
   return await response.json();
@@ -420,8 +432,8 @@ const apiGetVideoOperation = async (operationObj: any, userApiKey: string, baseU
   });
   
   if (!response.ok) {
-    const errorData = await response.json();
-    throw new Error(errorData.error || '获取视频操作状态失败');
+    const errorMessage = await extractErrorMessage(response, '获取视频操作状态失败');
+    throw new Error(errorMessage);
   }
   
   return await response.json();
@@ -436,8 +448,8 @@ const apiFetchVideo = async (downloadLink: string, userApiKey: string) => {
   });
 
   if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
-    throw new Error(errorData.error || `获取视频失败: ${response.statusText}`);
+    const errorMessage = await extractErrorMessage(response, `获取视频失败: ${response.statusText}`);
+    throw new Error(errorMessage);
   }
 
   return response;
