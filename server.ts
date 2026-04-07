@@ -13,6 +13,33 @@ const supabaseAnonKey = process.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_ja
 const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
 const app = express();
+const allowedOrigins = (process.env.ALLOWED_ORIGINS || '')
+  .split(',')
+  .map(origin => origin.trim())
+  .filter(Boolean);
+
+function applyCors(req: express.Request, res: express.Response) {
+  const requestOrigin = req.headers.origin;
+  const allowAllOrigins = allowedOrigins.length === 0;
+
+  if (requestOrigin && (allowAllOrigins || allowedOrigins.includes(requestOrigin))) {
+    res.setHeader('Access-Control-Allow-Origin', requestOrigin);
+    res.setHeader('Vary', 'Origin');
+  } else if (allowAllOrigins) {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+  }
+
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+}
+
+app.use((req, res, next) => {
+  applyCors(req, res);
+  if (req.method === 'OPTIONS') {
+    return res.status(204).end();
+  }
+  next();
+});
 app.use(express.json({ limit: '50mb' }));
 
 function normalizeProviderBaseUrl(rawBaseUrl: unknown, fallback: string) {

@@ -378,6 +378,11 @@ const getAuthHeaders = async () => {
 };
 
 const getSettingsMode = () => localStorage.getItem('settings_mode') === 'tool' ? 'tool' : 'gemini';
+const getApiBaseUrl = () => (import.meta.env.VITE_API_BASE_URL || '').trim().replace(/\/+$/, '');
+const buildApiUrl = (path: string) => {
+  const apiBaseUrl = getApiBaseUrl();
+  return apiBaseUrl ? `${apiBaseUrl}${path}` : path;
+};
 
 const extractErrorMessage = async (response: Response, fallback: string) => {
   const contentType = response.headers.get('content-type') || '';
@@ -393,7 +398,7 @@ const extractErrorMessage = async (response: Response, fallback: string) => {
 
 const apiGenerateContent = async (payload: any, userApiKey: string, baseUrl?: string, customModel?: string) => {
   const authHeaders = await getAuthHeaders();
-  const response = await fetch('/api/generate-content', {
+  const response = await fetch(buildApiUrl('/api/generate-content'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeaders },
     body: JSON.stringify({ payload, userApiKey, baseUrl, customModel, mode: getSettingsMode() })
@@ -409,7 +414,7 @@ const apiGenerateContent = async (payload: any, userApiKey: string, baseUrl?: st
 
 const apiGenerateVideos = async (payload: any, userApiKey: string, baseUrl?: string, customModel?: string, provider?: string) => {
   const authHeaders = await getAuthHeaders();
-  const response = await fetch('/api/generate-videos', {
+  const response = await fetch(buildApiUrl('/api/generate-videos'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeaders },
     body: JSON.stringify({ payload, userApiKey, baseUrl, customModel, provider, mode: getSettingsMode() })
@@ -425,7 +430,7 @@ const apiGenerateVideos = async (payload: any, userApiKey: string, baseUrl?: str
 
 const apiGetVideoOperation = async (operationObj: any, userApiKey: string, baseUrl?: string, customModel?: string, provider?: string) => {
   const authHeaders = await getAuthHeaders();
-  const response = await fetch('/api/get-video-operation', {
+  const response = await fetch(buildApiUrl('/api/get-video-operation'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeaders },
     body: JSON.stringify({ operationObj, userApiKey, baseUrl, customModel, provider, mode: getSettingsMode() })
@@ -441,7 +446,7 @@ const apiGetVideoOperation = async (operationObj: any, userApiKey: string, baseU
 
 const apiFetchVideo = async (downloadLink: string, userApiKey: string) => {
   const authHeaders = await getAuthHeaders();
-  const response = await fetch('/api/fetch-video', {
+  const response = await fetch(buildApiUrl('/api/fetch-video'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeaders },
     body: JSON.stringify({ downloadLink, userApiKey })
