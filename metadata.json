@@ -1,0 +1,5 @@
+{
+  "name": "AI Media Analyzer",
+  "description": "Analyze images and videos across 9 dimensions and generate AI prompts for Midjourney/Runway.",
+  "requestFramePermissions": []
+}

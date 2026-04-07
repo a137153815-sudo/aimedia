@@ -1,0 +1,26 @@
+﻿node_modules/
+build/
+dist/
+coverage/
+.vite/
+.vercel/
+.DS_Store
+
+*.log
+.codex-dev-*.out.log
+.codex-dev-*.err.log
+*.zip
+*.exe
+*.pdf
+*.before-recode
+
+.env*
+!.env.example
+
+App.broken.txt
+代码.txt
+图片生成源代码.txt
+ai-media-analyzer (1)/
+生成图片/
+test.ts
+src/components/UnifiedSettingsModal.tsx
