@@ -1,11 +1,6 @@
-import { GoogleGenAI } from '@google/genai';
-import { createClient } from '@supabase/supabase-js';
-
 const supabaseUrl = process.env.VITE_SUPABASE_URL || 'https://iuntxvmqkxgvcrbibcjr.supabase.co';
 const supabaseAnonKey =
   process.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_ja012WFpWiK_Ctbgq_Va_Q_tx3o7rSm';
-
-const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
 export function normalizeProviderBaseUrl(rawBaseUrl: unknown, fallback: string) {
   if (typeof rawBaseUrl !== 'string') return fallback;
@@ -49,6 +44,8 @@ export async function resolveApiKey(req: any, userApiKey?: string) {
   }
 
   const token = String(authHeader).replace('Bearer ', '');
+  const { createClient } = await import('@supabase/supabase-js');
+  const supabase = createClient(supabaseUrl, supabaseAnonKey);
   const {
     data: { user },
     error,
@@ -126,6 +123,7 @@ export function sendError(res: any, error: unknown, fallback = '请求失败') {
   return res.status(500).json({ error: errorMessage });
 }
 
-export function createGeminiClient(apiKey: string) {
+export async function createGeminiClient(apiKey: string) {
+  const { GoogleGenAI } = await import('@google/genai');
   return new GoogleGenAI({ apiKey });
 }

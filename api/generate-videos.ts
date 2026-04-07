@@ -107,7 +107,7 @@ export default async function handler(req: any, res: any) {
       return res.status(400).json({ error: 'Tool mode requires a supported video provider.' });
     }
 
-    const ai = createGeminiClient(apiKey);
+    const ai = await createGeminiClient(apiKey);
     const operation = await ai.models.generateVideos(payload);
     return res.status(200).json(operation);
   } catch (error) {

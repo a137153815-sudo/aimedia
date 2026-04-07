@@ -184,7 +184,7 @@ export default async function handler(req: any, res: any) {
       });
     }
 
-    const ai = createGeminiClient(apiKey);
+    const ai = await createGeminiClient(apiKey);
     const response = await ai.models.generateContent(payload);
 
     return res.status(200).json({
