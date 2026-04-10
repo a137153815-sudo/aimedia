@@ -66,6 +66,94 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok' });
 });
 
+app.post('/api/qumeng/upload-image', async (req, res) => {
+  try {
+    const {
+      imageDataUrl,
+      accessToken,
+      accountId,
+      materialType = 'BIG_IMAGE',
+      fileName = 'qumeng-image.png',
+    } = req.body || {};
+
+    if (!imageDataUrl || typeof imageDataUrl !== 'string') {
+      return res.status(400).json({ error: '缺少待上传的图片数据。' });
+    }
+
+    if (!accessToken || typeof accessToken !== 'string') {
+      return res.status(400).json({ error: '请先在设置中填写趣盟 Access Token。' });
+    }
+
+    if (!accountId || typeof accountId !== 'string') {
+      return res.status(400).json({ error: '请先在设置中填写趣盟账户 ID。' });
+    }
+
+    const dataUrlMatch = imageDataUrl.match(/^data:(.+?);base64,(.+)$/);
+    if (!dataUrlMatch) {
+      return res.status(400).json({ error: '图片数据格式不正确。' });
+    }
+
+    const mimeType = dataUrlMatch[1] || 'image/png';
+    const base64Data = dataUrlMatch[2];
+    const buffer = Buffer.from(base64Data, 'base64');
+
+    const uploadUrl = `https://openapi.aiclk.com/openapi/v1/material/upload?account_id=${encodeURIComponent(accountId)}`;
+
+    const buildFormData = (fieldName: 'material_type' | 'type') => {
+      const formData = new FormData();
+      formData.set('file', new Blob([buffer], { type: mimeType }), fileName);
+      formData.set(fieldName, materialType);
+      return formData;
+    };
+
+    let response = await fetch(uploadUrl, {
+      method: 'POST',
+      headers: {
+        OGW_ACCESS_TOKEN: accessToken,
+      },
+      body: buildFormData('material_type'),
+    });
+
+    let result = await response.json();
+
+    if (!response.ok || result?.code !== 200) {
+      const shouldRetryWithType =
+        result?.message?.includes('素材类型解析失败') ||
+        result?.message?.includes('material') ||
+        result?.code === 400;
+
+      if (shouldRetryWithType) {
+        response = await fetch(uploadUrl, {
+          method: 'POST',
+          headers: {
+            OGW_ACCESS_TOKEN: accessToken,
+          },
+          body: buildFormData('type'),
+        });
+        result = await response.json();
+      }
+    }
+
+    if (!response.ok || result?.code !== 200) {
+      return res.status(400).json({
+        error: result?.message || '趣盟素材上传失败',
+        raw: result,
+      });
+    }
+
+    return res.json({
+      success: true,
+      materialId: String(result.data?.id || ''),
+      materialType: result.data?.material_type || materialType,
+      remoteUrl: result.data?.remote_url || '',
+      raw: result,
+    });
+  } catch (error: any) {
+    console.error('Error uploading image to qumeng:', error);
+    return res.status(500).json({ error: error?.message || '趣盟图片上传失败。' });
+  }
+});
+
 app.post('/api/generate-content', async (req, res) => {
   try {
     const { payload, userApiKey, baseUrl, customModel, mode } = req.body;

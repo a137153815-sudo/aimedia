@@ -23,4 +23,5 @@ App.broken.txt
 ai-media-analyzer (1)/
 生成图片/
 test.ts
+tmp_test*.jpg
 src/components/UnifiedSettingsModal.tsx

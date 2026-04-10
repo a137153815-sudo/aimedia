@@ -7,6 +7,13 @@ import Auth from './components/Auth';
 import ModelSettingsModal from './components/ModelSettingsModal';
 
 type GenerationMode = 'video' | 'image';
+type QumengSyncStatus = 'idle' | 'syncing' | 'synced' | 'failed';
+
+const QUMENG_IMAGE_SYNC_SPEC = {
+  label: '大图',
+  size: '690×360',
+  materialType: 'BIG_IMAGE',
+};
 
 function DraggableOverlay({
   text,
@@ -606,6 +613,9 @@ export default function App() {
   const [generatedMedia, setGeneratedMedia] = useState<string[]>([]);
   const [mediaGenerationProgress, setMediaGenerationProgress] = useState<string>("");
   const [mediaGenerationError, setMediaGenerationError] = useState<string | null>(null);
+  const [qumengSyncStates, setQumengSyncStates] = useState<Record<number, { status: QumengSyncStatus; materialId?: string; error?: string }>>({});
+  const [isBulkSyncingToQumeng, setIsBulkSyncingToQumeng] = useState(false);
+  const [qumengSyncSummary, setQumengSyncSummary] = useState<string | null>(null);
   
   const [mediaBase64, setMediaBase64] = useState<{data: string, mimeType: string} | null>(null);
   const [mediaAspectRatio, setMediaAspectRatio] = useState<'16:9' | '9:16'>('16:9');
@@ -627,6 +637,12 @@ export default function App() {
   useEffect(() => {
     setTextPositions({});
   }, [overlayPosition]);
+
+  useEffect(() => {
+    setQumengSyncStates({});
+    setIsBulkSyncingToQumeng(false);
+    setQumengSyncSummary(null);
+  }, [generatedMedia, results?.mode]);
   
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -1229,6 +1245,147 @@ ${JSON.stringify(textMatrix, null, 2)}
       }
       await new Promise(resolve => setTimeout(resolve, 300));
     }
+  };
+
+  const buildQumengImageDataUrl = async (url: string, index: number) => {
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    if (!ctx) {
+      throw new Error('无法生成趣盟同步图片。');
+    }
+
+    const targetWidth = 690;
+    const targetHeight = 360;
+    canvas.width = targetWidth;
+    canvas.height = targetHeight;
+
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+
+    await new Promise<void>((resolve, reject) => {
+      img.onload = () => {
+        const scale = Math.max(targetWidth / img.width, targetHeight / img.height);
+        const drawWidth = img.width * scale;
+        const drawHeight = img.height * scale;
+        const offsetX = (targetWidth - drawWidth) / 2;
+        const offsetY = (targetHeight - drawHeight) / 2;
+
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, targetWidth, targetHeight);
+        ctx.drawImage(img, offsetX, offsetY, drawWidth, drawHeight);
+
+        if (overlayText) {
+          const scaledFontSize = overlayFontSize * (targetWidth / 500);
+          ctx.font = `${overlayFontWeight} ${scaledFontSize}px "SimHei", "Heiti SC", sans-serif`;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.shadowColor = 'rgba(0,0,0,0.4)';
+          ctx.shadowBlur = 8;
+          ctx.shadowOffsetX = 0;
+          ctx.shadowOffsetY = 4;
+
+          const pos = textPositions[index] || { x: 50, y: overlayPosition === 'top' ? 15 : 50 };
+          const x = canvas.width * (pos.x / 100);
+          const y = canvas.height * (pos.y / 100);
+
+          if (overlayStrokeWidth > 0) {
+            ctx.lineWidth = overlayStrokeWidth * (targetWidth / 500);
+            ctx.strokeStyle = overlayStroke;
+            ctx.strokeText(overlayText, x, y);
+          }
+
+          ctx.fillStyle = overlayColor;
+          ctx.fillText(overlayText, x, y);
+        }
+
+        resolve();
+      };
+      img.onerror = () => reject(new Error('无法读取待同步图片。'));
+      img.src = url;
+    });
+
+    return canvas.toDataURL('image/png');
+  };
+
+  const uploadImageToQumeng = async (imageDataUrl: string) => {
+    const accessToken = localStorage.getItem('qumeng_access_token') || '';
+    const accountId = localStorage.getItem('qumeng_account_id') || '';
+
+    if (!accessToken.trim()) {
+      throw new Error('请先在设置中填写趣盟 Access Token。');
+    }
+
+    if (!accountId.trim()) {
+      throw new Error('请先在设置中填写趣盟账户 ID。');
+    }
+
+    const response = await fetch('/api/qumeng/upload-image', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        imageDataUrl,
+        accessToken,
+        accountId,
+        materialType: QUMENG_IMAGE_SYNC_SPEC.materialType,
+        fileName: `qumeng-image-${Date.now()}.png`,
+      }),
+    });
+
+    const result = await response.json().catch(() => ({}));
+
+    if (!response.ok || !result?.success) {
+      throw new Error(result?.error || '趣盟图片上传失败。');
+    }
+
+    return result as { materialId: string; remoteUrl?: string; materialType?: string };
+  };
+
+  const syncSingleImageToQumeng = async (index: number) => {
+    if (results?.mode !== 'image') return;
+
+    setQumengSyncStates(prev => ({
+      ...prev,
+      [index]: { status: 'syncing' }
+    }));
+
+    try {
+      const imageDataUrl = await buildQumengImageDataUrl(generatedMedia[index], index);
+      const result = await uploadImageToQumeng(imageDataUrl);
+
+      setQumengSyncStates(prev => ({
+        ...prev,
+        [index]: {
+          status: 'synced',
+          materialId: result.materialId,
+        }
+      }));
+    } catch (err: any) {
+      const errorMessage = err?.message || '同步失败，请稍后重试。';
+      setQumengSyncStates(prev => ({
+        ...prev,
+        [index]: {
+          status: 'failed',
+          error: errorMessage,
+        }
+      }));
+      setQumengSyncSummary(errorMessage);
+    }
+  };
+
+  const syncAllImagesToQumeng = async () => {
+    if (results?.mode !== 'image' || generatedMedia.length === 0) return;
+
+    setIsBulkSyncingToQumeng(true);
+    setQumengSyncSummary(null);
+
+    for (let i = 0; i < generatedMedia.length; i++) {
+      await syncSingleImageToQumeng(i);
+    }
+
+    setIsBulkSyncingToQumeng(false);
+    setQumengSyncSummary('批量同步已执行完成，请查看每张图片卡片上的同步结果。');
   };
 
   if (hasApiKey === false) {
@@ -2013,49 +2170,146 @@ ${JSON.stringify(textMatrix, null, 2)}
 
                     <div className="flex items-center justify-between mb-4">
                       <h3 className="text-lg font-semibold text-slate-800">生成的{results.mode === 'video' ? '视频' : '图片'}</h3>
-                      {results.mode === 'image' && (
-                        <button
-                          onClick={handleSaveAllImages}
-                          className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-lg transition-colors shadow-sm"
-                        >
-                          <Download className="w-4 h-4" />
-                          一键保存图片
-                        </button>
-                      )}
+                      <div className="flex items-center gap-2">
+                        {results.mode === 'image' && (
+                          <>
+                            <button
+                              onClick={syncAllImagesToQumeng}
+                              disabled={isBulkSyncingToQumeng}
+                              className={`flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg transition-colors shadow-sm ${
+                                isBulkSyncingToQumeng
+                                  ? 'bg-amber-50 text-amber-500 cursor-wait'
+                                  : 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                              }`}
+                            >
+                              {isBulkSyncingToQumeng ? <Loader2 className="w-4 h-4 animate-spin" /> : <Layers className="w-4 h-4" />}
+                              一键同步 4 张
+                            </button>
+                            <button
+                              onClick={handleSaveAllImages}
+                              className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-lg transition-colors shadow-sm"
+                            >
+                              <Download className="w-4 h-4" />
+                              一键保存图片
+                            </button>
+                          </>
+                        )}
+                      </div>
                     </div>
+                    {results.mode === 'image' && (
+                      <div className="mb-4 rounded-xl border border-emerald-100 bg-emerald-50 p-4">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="px-2.5 py-1 rounded-full bg-white text-emerald-700 text-xs font-semibold border border-emerald-200">
+                            趣盟同步规格
+                          </span>
+                          <span className="px-2.5 py-1 rounded-full bg-white text-slate-700 text-xs font-medium border border-slate-200">
+                            {QUMENG_IMAGE_SYNC_SPEC.label} {QUMENG_IMAGE_SYNC_SPEC.size}
+                          </span>
+                          <span className="px-2.5 py-1 rounded-full bg-white text-slate-700 text-xs font-medium border border-slate-200">
+                            {QUMENG_IMAGE_SYNC_SPEC.materialType}
+                          </span>
+                        </div>
+                        <p className="mt-2 text-xs text-slate-600">
+                          当前先按趣盟已验证通过的 {QUMENG_IMAGE_SYNC_SPEC.materialType} 规格展示。后续其他符合规范的尺寸也可以继续扩展进来。
+                        </p>
+                        {qumengSyncSummary && (
+                          <p className="mt-2 text-xs text-amber-700">{qumengSyncSummary}</p>
+                        )}
+                      </div>
+                    )}
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                       {generatedMedia.map((url, idx) => (
-                      <div id={`media-container-${idx}`} key={idx} className={`rounded-xl overflow-hidden border border-slate-200 bg-black relative flex items-center justify-center group ${selectedAspectRatio === '9:16' ? 'aspect-[9/16]' : 'aspect-video'}`}>
-                        {results.mode === 'video' ? (
-                          <video 
-                            src={url} 
-                            controls 
-                            autoPlay
-                            loop
-                            muted
-                            className="w-full h-full object-contain" 
-                          />
-                        ) : (
-                          <img 
-                            src={url} 
-                            alt={`Generated ${idx + 1}`}
-                            className="w-full h-full object-contain"
-                          />
-                        )}
-                        <DraggableOverlay
-                          text={overlayText}
-                          color={overlayColor}
-                          stroke={overlayStroke}
-                          strokeWidth={overlayStrokeWidth}
-                          fontWeight={overlayFontWeight}
-                          fontSize={overlayFontSize}
-                          defaultPos={overlayPosition}
-                          position={textPositions[idx]}
-                          onPositionChange={(pos) => setTextPositions(prev => ({ ...prev, [idx]: pos }))}
-                          containerId={`media-container-${idx}`}
-                        />
-                      </div>
-                    ))}
+                        <div key={idx} className="rounded-xl overflow-hidden border border-slate-200 bg-white shadow-sm">
+                          {results.mode === 'image' && (
+                            <div className="flex items-center justify-between gap-3 border-b border-slate-100 bg-slate-50 px-4 py-3">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className="px-2 py-1 rounded-full bg-white text-slate-700 text-xs font-semibold border border-slate-200">
+                                  {QUMENG_IMAGE_SYNC_SPEC.label} {QUMENG_IMAGE_SYNC_SPEC.size}
+                                </span>
+                                <span className="px-2 py-1 rounded-full bg-white text-slate-700 text-xs font-medium border border-slate-200">
+                                  {QUMENG_IMAGE_SYNC_SPEC.materialType}
+                                </span>
+                                <span
+                                  className={`px-2 py-1 rounded-full text-xs font-medium border ${
+                                    qumengSyncStates[idx]?.status === 'synced'
+                                      ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                      : qumengSyncStates[idx]?.status === 'syncing'
+                                        ? 'bg-amber-50 text-amber-700 border-amber-200'
+                                        : qumengSyncStates[idx]?.status === 'failed'
+                                          ? 'bg-red-50 text-red-700 border-red-200'
+                                          : 'bg-slate-100 text-slate-600 border-slate-200'
+                                  }`}
+                                >
+                                  {qumengSyncStates[idx]?.status === 'synced'
+                                    ? '已同步'
+                                    : qumengSyncStates[idx]?.status === 'syncing'
+                                      ? '同步中'
+                                      : qumengSyncStates[idx]?.status === 'failed'
+                                        ? '同步失败'
+                                        : '未同步'}
+                                </span>
+                              </div>
+                              <button
+                                onClick={() => syncSingleImageToQumeng(idx)}
+                                disabled={qumengSyncStates[idx]?.status === 'syncing' || isBulkSyncingToQumeng}
+                                className={`shrink-0 rounded-lg px-3 py-2 text-xs font-medium transition-colors ${
+                                  qumengSyncStates[idx]?.status === 'syncing' || isBulkSyncingToQumeng
+                                    ? 'bg-emerald-50 text-emerald-400 cursor-wait'
+                                    : 'bg-emerald-600 text-white hover:bg-emerald-700'
+                                }`}
+                              >
+                                {qumengSyncStates[idx]?.status === 'syncing' ? '同步中...' : '同步到趣盟'}
+                              </button>
+                            </div>
+                          )}
+                          <div
+                            id={`media-container-${idx}`}
+                            className={`bg-black relative flex items-center justify-center group ${
+                              selectedAspectRatio === '9:16' ? 'aspect-[9/16]' : 'aspect-video'
+                            }`}
+                          >
+                            {results.mode === 'video' ? (
+                              <video
+                                src={url}
+                                controls
+                                autoPlay
+                                loop
+                                muted
+                                className="w-full h-full object-contain"
+                              />
+                            ) : (
+                              <img
+                                src={url}
+                                alt={`Generated ${idx + 1}`}
+                                className="w-full h-full object-contain"
+                              />
+                            )}
+                            <DraggableOverlay
+                              text={overlayText}
+                              color={overlayColor}
+                              stroke={overlayStroke}
+                              strokeWidth={overlayStrokeWidth}
+                              fontWeight={overlayFontWeight}
+                              fontSize={overlayFontSize}
+                              defaultPos={overlayPosition}
+                              position={textPositions[idx]}
+                              onPositionChange={(pos) => setTextPositions(prev => ({ ...prev, [idx]: pos }))}
+                              containerId={`media-container-${idx}`}
+                            />
+                          </div>
+                          {results.mode === 'image' && (
+                            <div className="border-t border-slate-100 px-4 py-3 bg-white">
+                              {qumengSyncStates[idx]?.materialId ? (
+                                <p className="text-xs text-emerald-700">素材ID：{qumengSyncStates[idx]?.materialId}</p>
+                              ) : qumengSyncStates[idx]?.error ? (
+                                <p className="text-xs text-red-600">{qumengSyncStates[idx]?.error}</p>
+                              ) : (
+                                <p className="text-xs text-slate-500">同步成功后会在这里显示趣盟素材ID。</p>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      ))}
                     </div>
                   </div>
                 )}

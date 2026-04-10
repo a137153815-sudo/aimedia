@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Image as ImageIcon, MessageSquare, Video, X } from 'lucide-react';
+import { Image as ImageIcon, Layers, MessageSquare, Video, X } from 'lucide-react';
 
 type SettingsMode = 'gemini' | 'tool';
 type ToolTextProvider = 'deepseek' | 'zhipu' | 'doubao';
@@ -171,6 +171,10 @@ export default function ModelSettingsModal({ onClose }: ModelSettingsModalProps)
       localStorage.getItem('video_model_name') ||
       VIDEO_PROVIDER_PRESETS[normalizeVideoProvider(localStorage.getItem('video_provider'))].model
   );
+  const [qumengClientId, setQumengClientId] = useState(() => localStorage.getItem('qumeng_client_id') || '');
+  const [qumengAccessToken, setQumengAccessToken] = useState(() => localStorage.getItem('qumeng_access_token') || '');
+  const [qumengRefreshToken, setQumengRefreshToken] = useState(() => localStorage.getItem('qumeng_refresh_token') || '');
+  const [qumengAccountId, setQumengAccountId] = useState(() => localStorage.getItem('qumeng_account_id') || '');
 
   const selectedTextPreset = TEXT_PROVIDER_PRESETS[textProvider];
   const selectedImagePreset = IMAGE_PROVIDER_PRESETS[imageProvider];
@@ -233,6 +237,10 @@ export default function ModelSettingsModal({ onClose }: ModelSettingsModalProps)
       setStoredValue('video_api_key', videoApiKey);
       setStoredValue('video_base_url', videoBaseUrl);
       setStoredValue('video_model_name', videoModelName);
+      setStoredValue('qumeng_client_id', qumengClientId);
+      setStoredValue('qumeng_access_token', qumengAccessToken);
+      setStoredValue('qumeng_refresh_token', qumengRefreshToken);
+      setStoredValue('qumeng_account_id', qumengAccountId);
     }
 
     onClose();
@@ -544,6 +552,57 @@ export default function ModelSettingsModal({ onClose }: ModelSettingsModalProps)
                     />
                   </div>
                 </div>
+              </SectionCard>
+
+              <SectionCard
+                icon={<Layers className="h-4 w-4 text-emerald-500" />}
+                title="趣盟素材同步"
+              >
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <div>
+                    <FieldLabel>App ID / Client ID</FieldLabel>
+                    <input
+                      type="text"
+                      value={qumengClientId}
+                      onChange={(event) => setQumengClientId(event.target.value)}
+                      placeholder="2000011280753172"
+                      className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none"
+                    />
+                  </div>
+                  <div>
+                    <FieldLabel>账户 ID</FieldLabel>
+                    <input
+                      type="text"
+                      value={qumengAccountId}
+                      onChange={(event) => setQumengAccountId(event.target.value)}
+                      placeholder="1867672"
+                      className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <FieldLabel>Access Token</FieldLabel>
+                  <textarea
+                    value={qumengAccessToken}
+                    onChange={(event) => setQumengAccessToken(event.target.value)}
+                    rows={4}
+                    placeholder="填写趣盟开放平台返回的 Access Token"
+                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none resize-y"
+                  />
+                </div>
+                <div>
+                  <FieldLabel>Refresh Token</FieldLabel>
+                  <textarea
+                    value={qumengRefreshToken}
+                    onChange={(event) => setQumengRefreshToken(event.target.value)}
+                    rows={3}
+                    placeholder="填写趣盟开放平台返回的 Refresh Token"
+                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none resize-y"
+                  />
+                </div>
+                <p className="text-[11px] text-slate-500">
+                  当前第一版会用 Access Token 和账户 ID 来同步图片素材，App ID 与 Refresh Token 先一起存好，后续接创意创建或 token 刷新时会用到。
+                </p>
               </SectionCard>
             </>
           )}
