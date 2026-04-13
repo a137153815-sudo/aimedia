@@ -8,11 +8,35 @@ import ModelSettingsModal from './components/ModelSettingsModal';
 
 type GenerationMode = 'video' | 'image';
 type QumengSyncStatus = 'idle' | 'syncing' | 'synced' | 'failed';
+type QumengImageSpecKey = 'BIG_IMAGE' | 'IMAGE';
 
-const QUMENG_IMAGE_SYNC_SPEC = {
-  label: '大图',
-  size: '690×360',
-  materialType: 'BIG_IMAGE',
+const QUMENG_IMAGE_SPECS: Record<QumengImageSpecKey, {
+  label: string;
+  sizeLabel: string;
+  width: number;
+  height: number;
+  materialType: QumengImageSpecKey;
+  maxBytes: number;
+  recommendedAspectRatio: '16:9' | '4:3';
+}> = {
+  BIG_IMAGE: {
+    label: '大图',
+    sizeLabel: '690×360',
+    width: 690,
+    height: 360,
+    materialType: 'BIG_IMAGE',
+    maxBytes: 500 * 1024,
+    recommendedAspectRatio: '16:9',
+  },
+  IMAGE: {
+    label: '小图',
+    sizeLabel: '225×150',
+    width: 225,
+    height: 150,
+    materialType: 'IMAGE',
+    maxBytes: 100 * 1024,
+    recommendedAspectRatio: '4:3',
+  },
 };
 
 function DraggableOverlay({
@@ -320,6 +344,28 @@ interface AnalysisResult {
   };
 }
 
+const normalizeRewardWording = (text: string) =>
+  text
+    .replace(/现金奖励|现金/g, '奖励')
+    .replace(/金币奖励|金币/g, '奖励')
+    .replace(/可提现/g, '奖励可领取')
+    .replace(/赚零花钱/g, '领取奖励');
+
+const normalizePromptText = (text: string) =>
+  normalizeRewardWording(text)
+    .replace(/文字位于顶部|标题位于顶部|顶部标题/g, '主标题位于画面中间')
+    .replace(/物理夸张|超现实/g, '真实自然');
+
+const normalizePromptVariation = (variation: PromptVariation): PromptVariation => ({
+  ...variation,
+  aiPrompt: normalizePromptText(variation.aiPrompt),
+  ctaCopy: normalizeRewardWording(variation.ctaCopy || ''),
+  narrativeAngle: variation.narrativeAngle || '',
+});
+
+const normalizePromptResult = (value: PromptVariation[] | string) =>
+  Array.isArray(value) ? value.map(normalizePromptVariation) : normalizePromptText(value);
+
 const extractFrame = async (file: File): Promise<{dataUrl: string, isPortrait: boolean}> => {
   return new Promise((resolve, reject) => {
     const video = document.createElement('video');
@@ -611,6 +657,7 @@ export default function App() {
   
   const [isGeneratingMedia, setIsGeneratingMedia] = useState(false);
   const [generatedMedia, setGeneratedMedia] = useState<string[]>([]);
+  const [generatedMediaPromptIndices, setGeneratedMediaPromptIndices] = useState<number[]>([]);
   const [mediaGenerationProgress, setMediaGenerationProgress] = useState<string>("");
   const [mediaGenerationError, setMediaGenerationError] = useState<string | null>(null);
   const [qumengSyncStates, setQumengSyncStates] = useState<Record<number, { status: QumengSyncStatus; materialId?: string; error?: string }>>({});
@@ -622,6 +669,10 @@ export default function App() {
   
   // Video Generation Settings
   const [selectedAspectRatio, setSelectedAspectRatio] = useState<'16:9' | '9:16'>('16:9');
+  const [selectedImageSpec, setSelectedImageSpec] = useState<QumengImageSpecKey>(() => {
+    const stored = localStorage.getItem('qumeng_image_spec');
+    return stored === 'IMAGE' ? 'IMAGE' : 'BIG_IMAGE';
+  });
   const [generationMethod, setGenerationMethod] = useState<'reference' | 'prompt'>('reference');
   const [referenceSimilarity, setReferenceSimilarity] = useState<number>(50);
   const [overlayText, setOverlayText] = useState("");
@@ -642,7 +693,13 @@ export default function App() {
     setQumengSyncStates({});
     setIsBulkSyncingToQumeng(false);
     setQumengSyncSummary(null);
-  }, [generatedMedia, results?.mode]);
+  }, [generatedMedia, results?.mode, selectedImageSpec]);
+
+  useEffect(() => {
+    localStorage.setItem('qumeng_image_spec', selectedImageSpec);
+  }, [selectedImageSpec]);
+
+  const currentQumengImageSpec = QUMENG_IMAGE_SPECS[selectedImageSpec];
   
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -703,7 +760,7 @@ ${textInput}
 补充要求：
 - 关键词要面向信息流广告投放，不要写空泛描述。
 - 如果是问卷、调研、投票、测试、报名等转化场景，关键词里要体现参与感、互动感、手机操作感。
-- 如果存在激励机制，优先使用“金币奖励、现金奖励、可提现、赚零花钱”这一类表达，不要出现代金券、优惠券、礼品卡。
+- 如果存在激励机制，统一使用“奖励、参与奖励、完成奖励”这类中性表达，不要出现现金、金币、可提现、代金券、优惠券、礼品卡。
 - 场景词和视觉元素要尽量贴近真实投放素材，而不是论文式总结。`;
 
       const response = await withRetry(() => apiGenerateContent({
@@ -768,8 +825,13 @@ ${JSON.stringify(textMatrix, null, 2)}
 
 图片提示词要求：
 - 如果是海报或调研招募类素材，画面里只保留一个主标题，不要堆很多文字。
+- 主标题固定放在画面中间，其他位置不要再出现补充文案、金额文案或按钮字。
 - 背景必须和行业、内容主题、调研对象强相关，不要套泛用背景。
 - 更偏向真实投放海报风格，而不是设计练习作品。
+- 必须是符合物理常识的真实场景，人物动作、手势、道具关系都要自然可信。
+- 如果出现人物手持手机展示内容，必须展示手机正面屏幕，不要出现拿着手机背面给镜头看的错误画面。
+- 必须先根据关键词矩阵判断行业语境再出图：例如输入网文调研、小说调研、阅读偏好调研时，画面必须围绕“看小说/看网文”的真实阅读场景展开，如手机阅读、追更、书荒选择、夜间阅读、通勤阅读等。
+- 不要出现现金、金币、红包、可提现等字样，一律用“奖励”表达。
 
 投放要求：
 - 抖音：强调节奏快、冲击力强、情绪明显、竖屏友好。
@@ -777,8 +839,8 @@ ${JSON.stringify(textMatrix, null, 2)}
 - 朋友圈：强调真实感、熟人传播感、可信度和轻互动感。
 
 转化文案要求：
-- 如果是问卷、调研、投票、测试类转化，请优先写“金币奖励、现金奖励、可提现、赚零花钱”等表达。
-- 不要出现代金券、优惠券、礼品卡、赠品券。
+- 如果是问卷、调研、投票、测试类转化，请统一写“奖励、参与奖励、完成奖励”等表达。
+- 不要出现现金、金币、可提现、代金券、优惠券、礼品卡、赠品券。
 
 差异化要求：
 - 4 个变体必须使用不同的叙事角度，例如痛点切入、结果诱导、好奇钩子、利益钩子、群体认同、悬念推进。
@@ -796,9 +858,23 @@ ${JSON.stringify(textMatrix, null, 2)}
       const jsonStr = response.text;
       if (jsonStr) {
          const parsed = JSON.parse(jsonStr);
-         setTextPrompts(parsed);
+         const normalizedPrompts: TextPromptsResult = {
+           douyin: {
+             video: parsed.douyin.video.map(normalizePromptVariation),
+             image: parsed.douyin.image.map(normalizePromptVariation),
+           },
+           xiaohongshu: {
+             video: parsed.xiaohongshu.video.map(normalizePromptVariation),
+             image: parsed.xiaohongshu.image.map(normalizePromptVariation),
+           },
+           moments: {
+             video: parsed.moments.video.map(normalizePromptVariation),
+             image: parsed.moments.image.map(normalizePromptVariation),
+           },
+         };
+         setTextPrompts(normalizedPrompts);
          
-         let safeAiPrompt = parsed[selectedPlatform]?.[generationMode];
+         let safeAiPrompt = normalizedPrompts[selectedPlatform]?.[generationMode];
          if (safeAiPrompt && typeof safeAiPrompt === 'object' && !Array.isArray(safeAiPrompt)) {
            safeAiPrompt = JSON.stringify(safeAiPrompt, null, 2);
          }
@@ -934,8 +1010,12 @@ ${JSON.stringify(textMatrix, null, 2)}
 - 提示词用中文写，可直接给智谱、豆包等国内模型使用。
 - 明确主体人数、主体关系、姿态、构图、背景、光线和材质细节。
 - 如果是海报、调研招募、活动推广类画面，默认只保留一个主标题，不要堆叠大量文字。
+- 主标题固定在画面中间，其他位置不要再出现现金文案、金额文案或按钮字。
 - 背景必须和行业、活动内容、目标用户强相关，避免空洞背景。
 - 保持原图风格、质感和文化氛围一致，但 4 个变体在镜头、动作、元素或场景上要有明确差异。
+- 必须符合真实场景和物理常识，人物动作、道具关系、透视逻辑都要可信。
+- 如果画面有人拿手机展示内容，必须展示手机正面屏幕而不是背面。
+- 奖励类措辞统一使用“奖励”，不要出现现金、金币、可提现等字样。
 - 每个变体返回一个简短中文 narrativeAngle，说明差异点。`;
         currentSchema = imageSchema;
       }
@@ -957,7 +1037,7 @@ ${JSON.stringify(textMatrix, null, 2)}
       const jsonStr = response.text;
       if (jsonStr) {
          const parsed = JSON.parse(jsonStr);
-         let safeAiPrompt = parsed.aiPrompts || parsed.aiPrompt;
+         let safeAiPrompt = normalizePromptResult(parsed.aiPrompts || parsed.aiPrompt);
          if (safeAiPrompt && typeof safeAiPrompt === 'object' && !Array.isArray(safeAiPrompt)) {
            safeAiPrompt = JSON.stringify(safeAiPrompt, null, 2);
          }
@@ -1014,12 +1094,49 @@ ${JSON.stringify(textMatrix, null, 2)}
     }
   };
 
+  const requestSingleImage = async (basePrompt: string) => {
+    const isReference = inputType === 'upload' && generationMethod === 'reference' && mediaBase64;
+          const response = await withRetry(() => apiGenerateContent({
+            model: imageModelName || imageModel,
+            contents: {
+              parts: [
+          ...(isReference ? [{
+            inlineData: {
+              data: mediaBase64.data,
+              mimeType: mediaBase64.mimeType
+            }
+          }] : []),
+          {
+            text: isReference
+              ? `${basePrompt}. Maintain ${referenceSimilarity}% similarity to the reference image's ART STYLE and VIBE, but ensure the content/subject matches the prompt description.`
+              : basePrompt
+          }
+        ]
+      },
+            config: {
+              imageConfig: {
+                aspectRatio: currentQumengImageSpec.recommendedAspectRatio,
+                imageSize: "1K"
+              }
+            }
+    }, imageApiKey, imageBaseUrl, imageModelName));
+
+    for (const part of response.candidates?.[0]?.content?.parts || []) {
+      if (part.inlineData) {
+        const base64EncodeString = part.inlineData.data;
+        return `data:${part.inlineData.mimeType};base64,${base64EncodeString}`;
+      }
+    }
+    throw new Error('API 未返回图像数据');
+  };
+
   const generateMedia = async () => {
     if (!results?.aiPrompt) return;
     
     setIsGeneratingMedia(true);
     setMediaGenerationError(null);
     setGeneratedMedia([]);
+    setGeneratedMediaPromptIndices([]);
     
     try {
       setMediaGenerationProgress("Checking API key...");
@@ -1093,53 +1210,19 @@ ${JSON.stringify(textMatrix, null, 2)}
           setMediaGenerationError(`由于 API 限制或错误，4 个视频中只有 ${successfulMedia.length} 个生成成功。`);
         }
       } else {
-        setMediaGenerationProgress("Initializing Gemini Image model for 4 images...");
-        
-        const generateSingleImage = async (index: number) => {
-          const basePrompt = Array.isArray(results.aiPrompt) ? results.aiPrompt[index].aiPrompt : results.aiPrompt;
-          const isReference = inputType === 'upload' && generationMethod === 'reference' && mediaBase64;
-          const response = await withRetry(() => apiGenerateContent({
-            model: imageModelName || imageModel,
-            contents: {
-              parts: [
-                ...(isReference ? [{
-                  inlineData: {
-                    data: mediaBase64.data,
-                    mimeType: mediaBase64.mimeType
-                  }
-                }] : []),
-                { text: isReference 
-                    ? `${basePrompt}. Maintain ${referenceSimilarity}% similarity to the reference image's ART STYLE and VIBE, but ensure the content/subject matches the prompt description.`
-                    : basePrompt 
-                }
-              ]
-            },
-            config: {
-              imageConfig: {
-                aspectRatio: selectedAspectRatio,
-                imageSize: "1K"
-              }
-            }
-          }, imageApiKey, imageBaseUrl, imageModelName));
-          
-          for (const part of response.candidates?.[0]?.content?.parts || []) {
-            if (part.inlineData) {
-              const base64EncodeString = part.inlineData.data;
-              return `data:${part.inlineData.mimeType};base64,${base64EncodeString}`;
-            }
-          }
-          throw new Error('API 未返回图像数据');
-        };
-
         setMediaGenerationProgress("Generating 4 images sequentially... Please wait.");
         
         const successfulMedia: string[] = [];
+        const sourcePromptIndices: number[] = [];
         for (let i = 0; i < 4; i++) {
           try {
             setMediaGenerationProgress(`Generating image ${i + 1} of 4...`);
-            const imageUrl = await generateSingleImage(i);
+            const basePrompt = Array.isArray(results.aiPrompt) ? results.aiPrompt[i].aiPrompt : results.aiPrompt;
+            const imageUrl = await requestSingleImage(basePrompt);
             successfulMedia.push(imageUrl);
+            sourcePromptIndices.push(i);
             setGeneratedMedia([...successfulMedia]); // Update UI progressively
+            setGeneratedMediaPromptIndices([...sourcePromptIndices]);
             // Add a small delay between requests to avoid rate limits
             if (i < 3) await new Promise(resolve => setTimeout(resolve, 1000));
           } catch (err) {
@@ -1152,6 +1235,7 @@ ${JSON.stringify(textMatrix, null, 2)}
         }
 
         setGeneratedMedia(successfulMedia);
+        setGeneratedMediaPromptIndices(sourcePromptIndices);
         
         if (successfulMedia.length < 4) {
           setMediaGenerationError(`由于 API 限制或错误，4 个图像中只有 ${successfulMedia.length} 个生成成功。`);
@@ -1247,6 +1331,28 @@ ${JSON.stringify(textMatrix, null, 2)}
     }
   };
 
+  const generateSingleImageFromPrompt = async (index: number) => {
+    if (!results?.aiPrompt || results.mode !== 'image' || !Array.isArray(results.aiPrompt)) return;
+
+    setIsGeneratingMedia(true);
+    setMediaGenerationError(null);
+    setGeneratedMedia([]);
+    setGeneratedMediaPromptIndices([]);
+
+    try {
+      setMediaGenerationProgress(`Generating image for prompt ${index + 1}...`);
+      const imageUrl = await requestSingleImage(results.aiPrompt[index].aiPrompt);
+      setGeneratedMedia([imageUrl]);
+      setGeneratedMediaPromptIndices([index]);
+      setMediaGenerationProgress('');
+    } catch (err: any) {
+      const errorMessage = err?.message || '生成单张图片失败，请重试。';
+      setMediaGenerationError(errorMessage);
+    } finally {
+      setIsGeneratingMedia(false);
+    }
+  };
+
   const buildQumengImageDataUrl = async (url: string, index: number) => {
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d');
@@ -1254,8 +1360,8 @@ ${JSON.stringify(textMatrix, null, 2)}
       throw new Error('无法生成趣盟同步图片。');
     }
 
-    const targetWidth = 690;
-    const targetHeight = 360;
+    const targetWidth = currentQumengImageSpec.width;
+    const targetHeight = currentQumengImageSpec.height;
     canvas.width = targetWidth;
     canvas.height = targetHeight;
 
@@ -1304,7 +1410,27 @@ ${JSON.stringify(textMatrix, null, 2)}
       img.src = url;
     });
 
-    return canvas.toDataURL('image/png');
+    let quality = 0.92;
+    let dataUrl = canvas.toDataURL('image/jpeg', quality);
+
+    while (quality > 0.45) {
+      const base64 = dataUrl.split(',')[1] || '';
+      const estimatedBytes = Math.ceil((base64.length * 3) / 4);
+      if (estimatedBytes <= currentQumengImageSpec.maxBytes) {
+        break;
+      }
+
+      quality -= 0.08;
+      dataUrl = canvas.toDataURL('image/jpeg', Math.max(quality, 0.4));
+    }
+
+    const finalBase64 = dataUrl.split(',')[1] || '';
+    const finalBytes = Math.ceil((finalBase64.length * 3) / 4);
+    if (finalBytes > currentQumengImageSpec.maxBytes) {
+      throw new Error(`上传文件要小于${Math.ceil(currentQumengImageSpec.maxBytes / 1024)}K（当前约 ${Math.ceil(finalBytes / 1024)}K）`);
+    }
+
+    return dataUrl;
   };
 
   const uploadImageToQumeng = async (imageDataUrl: string) => {
@@ -1328,8 +1454,8 @@ ${JSON.stringify(textMatrix, null, 2)}
         imageDataUrl,
         accessToken,
         accountId,
-        materialType: QUMENG_IMAGE_SYNC_SPEC.materialType,
-        fileName: `qumeng-image-${Date.now()}.png`,
+        materialType: currentQumengImageSpec.materialType,
+        fileName: `qumeng-image-${Date.now()}.jpg`,
       }),
     });
 
@@ -1924,7 +2050,22 @@ ${JSON.stringify(textMatrix, null, 2)}
                                 </span>
                               )}
                             </div>
-                            <span className="text-xs font-medium text-slate-500">变体 {idx + 1}</span>
+                            <div className="flex items-center gap-2">
+                              {results.mode === 'image' && (
+                                <button
+                                  onClick={() => generateSingleImageFromPrompt(idx)}
+                                  disabled={isGeneratingMedia}
+                                  className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${
+                                    isGeneratingMedia
+                                      ? 'bg-slate-700 text-slate-400 cursor-wait'
+                                      : 'bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30'
+                                  }`}
+                                >
+                                  生成此图片
+                                </button>
+                              )}
+                              <span className="text-xs font-medium text-slate-500">变体 {idx + 1}</span>
+                            </div>
                           </div>
                           <div className="p-4 flex-1 flex flex-col gap-2">
                             <label className="text-xs font-semibold text-slate-400">AI 提示词（可编辑）:</label>
@@ -1987,12 +2128,12 @@ ${JSON.stringify(textMatrix, null, 2)}
                     {isGeneratingMedia ? (
                       <>
                         <Loader2 className="w-4 h-4 animate-spin" />
-                        正在生成 4 个{results.mode === 'video' ? '视频' : '图片'}...
+                        正在生成{results.mode === 'video' ? '视频' : '图片'}...
                       </>
                     ) : (
                       <>
                         <Sparkles className="w-4 h-4" />
-                        生成 4 个{results.mode === 'video' ? '视频' : '图片'}
+                        一键生成 4 个{results.mode === 'video' ? '视频' : '图片'}
                       </>
                     )}
                   </button>
@@ -2003,18 +2144,36 @@ ${JSON.stringify(textMatrix, null, 2)}
                   <h4 className="text-sm font-semibold text-slate-700">生成设置</h4>
                   
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                    <div>
-                      <label className="block text-xs font-medium text-slate-500 mb-1.5">画面比例</label>
-                      <select 
-                        value={selectedAspectRatio}
-                        onChange={(e) => setSelectedAspectRatio(e.target.value as '16:9' | '9:16')}
-                        className="w-full text-sm rounded-lg border border-slate-200 p-2.5 outline-none focus:border-indigo-500 bg-white"
-                        disabled={isGeneratingMedia}
-                      >
-                        <option value="16:9">横屏 (16:9)</option>
-                        <option value="9:16">竖屏 (9:16)</option>
-                      </select>
-                    </div>
+                    {results.mode === 'image' ? (
+                      <div>
+                        <label className="block text-xs font-medium text-slate-500 mb-1.5">图片规格</label>
+                        <select
+                          value={selectedImageSpec}
+                          onChange={(e) => setSelectedImageSpec(e.target.value as QumengImageSpecKey)}
+                          className="w-full text-sm rounded-lg border border-slate-200 p-2.5 outline-none focus:border-indigo-500 bg-white"
+                          disabled={isGeneratingMedia}
+                        >
+                          <option value="BIG_IMAGE">大图 690×360（BIG_IMAGE）</option>
+                          <option value="IMAGE">小图 225×150（IMAGE）</option>
+                        </select>
+                        <p className="text-[10px] text-slate-500 mt-1">
+                          生成结果会按所选规格在同步到趣盟时自动裁切压缩。
+                        </p>
+                      </div>
+                    ) : (
+                      <div>
+                        <label className="block text-xs font-medium text-slate-500 mb-1.5">画面比例</label>
+                        <select 
+                          value={selectedAspectRatio}
+                          onChange={(e) => setSelectedAspectRatio(e.target.value as '16:9' | '9:16')}
+                          className="w-full text-sm rounded-lg border border-slate-200 p-2.5 outline-none focus:border-indigo-500 bg-white"
+                          disabled={isGeneratingMedia}
+                        >
+                          <option value="16:9">横屏 (16:9)</option>
+                          <option value="9:16">竖屏 (9:16)</option>
+                        </select>
+                      </div>
+                    )}
                     
                     <div>
                       <label className="block text-xs font-medium text-slate-500 mb-1.5">生成方式</label>
@@ -2203,14 +2362,14 @@ ${JSON.stringify(textMatrix, null, 2)}
                             趣盟同步规格
                           </span>
                           <span className="px-2.5 py-1 rounded-full bg-white text-slate-700 text-xs font-medium border border-slate-200">
-                            {QUMENG_IMAGE_SYNC_SPEC.label} {QUMENG_IMAGE_SYNC_SPEC.size}
+                            {currentQumengImageSpec.label} {currentQumengImageSpec.sizeLabel}
                           </span>
                           <span className="px-2.5 py-1 rounded-full bg-white text-slate-700 text-xs font-medium border border-slate-200">
-                            {QUMENG_IMAGE_SYNC_SPEC.materialType}
+                            {currentQumengImageSpec.materialType}
                           </span>
                         </div>
                         <p className="mt-2 text-xs text-slate-600">
-                          当前先按趣盟已验证通过的 {QUMENG_IMAGE_SYNC_SPEC.materialType} 规格展示。后续其他符合规范的尺寸也可以继续扩展进来。
+                          当前按所选趣盟规格生成并同步：{currentQumengImageSpec.label} {currentQumengImageSpec.sizeLabel} / {currentQumengImageSpec.materialType}。
                         </p>
                         {qumengSyncSummary && (
                           <p className="mt-2 text-xs text-amber-700">{qumengSyncSummary}</p>
@@ -2224,11 +2383,16 @@ ${JSON.stringify(textMatrix, null, 2)}
                             <div className="flex items-center justify-between gap-3 border-b border-slate-100 bg-slate-50 px-4 py-3">
                               <div className="flex flex-wrap items-center gap-2">
                                 <span className="px-2 py-1 rounded-full bg-white text-slate-700 text-xs font-semibold border border-slate-200">
-                                  {QUMENG_IMAGE_SYNC_SPEC.label} {QUMENG_IMAGE_SYNC_SPEC.size}
+                                  {currentQumengImageSpec.label} {currentQumengImageSpec.sizeLabel}
                                 </span>
                                 <span className="px-2 py-1 rounded-full bg-white text-slate-700 text-xs font-medium border border-slate-200">
-                                  {QUMENG_IMAGE_SYNC_SPEC.materialType}
+                                  {currentQumengImageSpec.materialType}
                                 </span>
+                                {generatedMediaPromptIndices[idx] !== undefined && (
+                                  <span className="px-2 py-1 rounded-full bg-white text-indigo-700 text-xs font-medium border border-indigo-200">
+                                    来源提示词 {generatedMediaPromptIndices[idx] + 1}
+                                  </span>
+                                )}
                                 <span
                                   className={`px-2 py-1 rounded-full text-xs font-medium border ${
                                     qumengSyncStates[idx]?.status === 'synced'
