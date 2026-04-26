@@ -4,11 +4,12 @@ import { UploadCloud, Image as ImageIcon, Video, Loader2, CheckCircle, Copy, Spa
 import { motion } from 'motion/react';
 import { supabase } from './lib/supabase';
 import Auth from './components/Auth';
-import ModelSettingsModal from './components/ModelSettingsModal';
+import SettingsModal from './components/SettingsModal';
 
 type GenerationMode = 'video' | 'image';
 type QumengSyncStatus = 'idle' | 'syncing' | 'synced' | 'failed';
 type QumengImageSpecKey = 'BIG_IMAGE' | 'IMAGE';
+type QumengVideoSpecKey = 'VERTICAL_VIDEO';
 
 const QUMENG_IMAGE_SPECS: Record<QumengImageSpecKey, {
   label: string;
@@ -36,6 +37,26 @@ const QUMENG_IMAGE_SPECS: Record<QumengImageSpecKey, {
     materialType: 'IMAGE',
     maxBytes: 100 * 1024,
     recommendedAspectRatio: '4:3',
+  },
+};
+
+const QUMENG_VIDEO_SPECS: Record<QumengVideoSpecKey, {
+  label: string;
+  specLabel: string;
+  materialType: QumengVideoSpecKey;
+  aspectRatio: '9:16';
+  maxBytes: number;
+  maxDurationSeconds: number;
+  formats: string[];
+}> = {
+  VERTICAL_VIDEO: {
+    label: '竖版视频',
+    specLabel: '9:16 · ≤150MB · ≤30s',
+    materialType: 'VERTICAL_VIDEO',
+    aspectRatio: '9:16',
+    maxBytes: 150 * 1024 * 1024,
+    maxDurationSeconds: 30,
+    formats: ['mp4', 'mov', 'avi'],
   },
 };
 
@@ -558,7 +579,7 @@ export default function App() {
   const [videoApiKey, setVideoApiKey] = useState(() => localStorage.getItem('video_api_key') || '');
   const [videoBaseUrl, setVideoBaseUrl] = useState(() => localStorage.getItem('video_base_url') || '');
   const [videoModelName, setVideoModelName] = useState(() => localStorage.getItem('video_model_name') || '');
-  const [videoProvider, setVideoProvider] = useState(() => localStorage.getItem('video_provider') || 'gemini');
+  const [videoProvider, setVideoProvider] = useState(() => localStorage.getItem('video_provider') || 'zhipu');
   
   const [textModel, setTextModel] = useState(() => localStorage.getItem('text_model') || 'gemini-3.1-pro-preview');
   const [imageModel, setImageModel] = useState(() => localStorage.getItem('image_model') || 'gemini-3.1-flash-image-preview');
@@ -658,6 +679,7 @@ export default function App() {
   const [isGeneratingMedia, setIsGeneratingMedia] = useState(false);
   const [generatedMedia, setGeneratedMedia] = useState<string[]>([]);
   const [generatedMediaPromptIndices, setGeneratedMediaPromptIndices] = useState<number[]>([]);
+  const [generatedVideoSourceUrls, setGeneratedVideoSourceUrls] = useState<string[]>([]);
   const [mediaGenerationProgress, setMediaGenerationProgress] = useState<string>("");
   const [mediaGenerationError, setMediaGenerationError] = useState<string | null>(null);
   const [qumengSyncStates, setQumengSyncStates] = useState<Record<number, { status: QumengSyncStatus; materialId?: string; error?: string }>>({});
@@ -672,6 +694,10 @@ export default function App() {
   const [selectedImageSpec, setSelectedImageSpec] = useState<QumengImageSpecKey>(() => {
     const stored = localStorage.getItem('qumeng_image_spec');
     return stored === 'IMAGE' ? 'IMAGE' : 'BIG_IMAGE';
+  });
+  const [selectedVideoSpec, setSelectedVideoSpec] = useState<QumengVideoSpecKey>(() => {
+    const stored = localStorage.getItem('qumeng_video_spec');
+    return stored === 'VERTICAL_VIDEO' ? 'VERTICAL_VIDEO' : 'VERTICAL_VIDEO';
   });
   const [generationMethod, setGenerationMethod] = useState<'reference' | 'prompt'>('reference');
   const [referenceSimilarity, setReferenceSimilarity] = useState<number>(50);
@@ -693,13 +719,21 @@ export default function App() {
     setQumengSyncStates({});
     setIsBulkSyncingToQumeng(false);
     setQumengSyncSummary(null);
-  }, [generatedMedia, results?.mode, selectedImageSpec]);
+    if (results?.mode !== 'video') {
+      setGeneratedVideoSourceUrls([]);
+    }
+  }, [generatedMedia, results?.mode, selectedImageSpec, selectedVideoSpec]);
 
   useEffect(() => {
     localStorage.setItem('qumeng_image_spec', selectedImageSpec);
   }, [selectedImageSpec]);
 
   const currentQumengImageSpec = QUMENG_IMAGE_SPECS[selectedImageSpec];
+  useEffect(() => {
+    localStorage.setItem('qumeng_video_spec', selectedVideoSpec);
+  }, [selectedVideoSpec]);
+
+  const currentQumengVideoSpec = QUMENG_VIDEO_SPECS[selectedVideoSpec];
   
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -1130,6 +1164,51 @@ ${JSON.stringify(textMatrix, null, 2)}
     throw new Error('API 未返回图像数据');
   };
 
+  const requestSingleVideo = async (basePrompt: string) => {
+    let operation = await withRetry(() => apiGenerateVideos({
+      model: videoModelName || videoModel,
+      prompt: generationMethod === 'reference' && mediaBase64
+        ? `${basePrompt}. Maintain ${referenceSimilarity}% similarity to the reference image's ART STYLE and VIBE, but ensure the content/subject matches the prompt description.`
+        : basePrompt,
+      ...(generationMethod === 'reference' && mediaBase64
+        ? {
+            image: {
+              imageBytes: mediaBase64.data,
+              mimeType: mediaBase64.mimeType,
+            },
+          }
+        : {}),
+      config: {
+        numberOfVideos: 1,
+        resolution: '720p',
+        aspectRatio: currentQumengVideoSpec.aspectRatio,
+      },
+    }, videoApiKey, videoBaseUrl, videoModelName, videoProvider));
+
+    while (!operation.done) {
+      await new Promise((resolve) => setTimeout(resolve, 10000));
+      operation = await withRetry(() =>
+        apiGetVideoOperation(operation, videoApiKey, videoBaseUrl, videoModelName, videoProvider)
+      );
+    }
+
+    const downloadLink = operation.response?.generatedVideos?.[0]?.video?.uri;
+    if (!downloadLink) {
+      throw new Error('视频生成已完成，但未返回视频 URI。');
+    }
+
+    const response = await apiFetchVideo(downloadLink, videoApiKey);
+    if (!response.ok) {
+      throw new Error(`下载视频失败: ${response.statusText}`);
+    }
+
+    const blob = await response.blob();
+    return {
+      previewUrl: URL.createObjectURL(blob),
+      sourceUrl: downloadLink,
+    };
+  };
+
   const generateMedia = async () => {
     if (!results?.aiPrompt) return;
     
@@ -1137,62 +1216,30 @@ ${JSON.stringify(textMatrix, null, 2)}
     setMediaGenerationError(null);
     setGeneratedMedia([]);
     setGeneratedMediaPromptIndices([]);
+    setGeneratedVideoSourceUrls([]);
     
     try {
       setMediaGenerationProgress("Checking API key...");
 
       if (results.mode === 'video') {
         setMediaGenerationProgress("Initializing Veo 3.1 model for 4 videos...");
-        
-        const generateSingleVideo = async (index: number) => {
-          const basePrompt = Array.isArray(results.aiPrompt) ? results.aiPrompt[index].aiPrompt : results.aiPrompt;
-          let operation = await withRetry(() => apiGenerateVideos({
-            model: videoModelName || videoModel,
-            prompt: generationMethod === 'reference' && mediaBase64 
-              ? `${basePrompt}. Maintain ${referenceSimilarity}% similarity to the reference image's ART STYLE and VIBE, but ensure the content/subject matches the prompt description.`
-              : basePrompt,
-            ...(generationMethod === 'reference' && mediaBase64 ? {
-              image: {
-                imageBytes: mediaBase64.data,
-                mimeType: mediaBase64.mimeType
-              }
-            } : {}),
-            config: {
-              numberOfVideos: 1,
-              resolution: '720p',
-              aspectRatio: selectedAspectRatio
-            }
-          }, videoApiKey, videoBaseUrl, videoModelName, videoProvider));
-
-          while (!operation.done) {
-            await new Promise(resolve => setTimeout(resolve, 10000));
-            operation = await withRetry(() => apiGetVideoOperation(operation, videoApiKey, videoBaseUrl, videoModelName, videoProvider));
-          }
-
-          const downloadLink = operation.response?.generatedVideos?.[0]?.video?.uri;
-          if (!downloadLink) {
-            throw new Error('视频生成已完成，但未返回视频 URI。');
-          }
-
-          const response = await apiFetchVideo(downloadLink, videoApiKey);
-
-          if (!response.ok) {
-            throw new Error(`下载视频失败: ${response.statusText}`);
-          }
-
-          const blob = await response.blob();
-          return URL.createObjectURL(blob);
-        };
 
         setMediaGenerationProgress("Generating 4 videos sequentially... This usually takes 1-3 minutes per video. Please don't close this window.");
         
         const successfulMedia: string[] = [];
+        const sourcePromptIndices: number[] = [];
+        const sourceUrls: string[] = [];
         for (let i = 0; i < 4; i++) {
           try {
             setMediaGenerationProgress(`Generating video ${i + 1} of 4...`);
-            const videoUrl = await generateSingleVideo(i);
-            successfulMedia.push(videoUrl);
+            const basePrompt = Array.isArray(results.aiPrompt) ? results.aiPrompt[i].aiPrompt : results.aiPrompt;
+            const videoResult = await requestSingleVideo(basePrompt);
+            successfulMedia.push(videoResult.previewUrl);
+            sourcePromptIndices.push(i);
+            sourceUrls.push(videoResult.sourceUrl);
             setGeneratedMedia([...successfulMedia]); // Update UI progressively
+            setGeneratedMediaPromptIndices([...sourcePromptIndices]);
+            setGeneratedVideoSourceUrls([...sourceUrls]);
             // Add a small delay between requests to avoid rate limits
             if (i < 3) await new Promise(resolve => setTimeout(resolve, 2000));
           } catch (err) {
@@ -1205,6 +1252,8 @@ ${JSON.stringify(textMatrix, null, 2)}
         }
 
         setGeneratedMedia(successfulMedia);
+        setGeneratedMediaPromptIndices(sourcePromptIndices);
+        setGeneratedVideoSourceUrls(sourceUrls);
         
         if (successfulMedia.length < 4) {
           setMediaGenerationError(`由于 API 限制或错误，4 个视频中只有 ${successfulMedia.length} 个生成成功。`);
@@ -1353,6 +1402,30 @@ ${JSON.stringify(textMatrix, null, 2)}
     }
   };
 
+  const generateSingleVideoFromPrompt = async (index: number) => {
+    if (!results?.aiPrompt || results.mode !== 'video' || !Array.isArray(results.aiPrompt)) return;
+
+    setIsGeneratingMedia(true);
+    setMediaGenerationError(null);
+    setGeneratedMedia([]);
+    setGeneratedMediaPromptIndices([]);
+    setGeneratedVideoSourceUrls([]);
+
+    try {
+      setMediaGenerationProgress(`Generating video for prompt ${index + 1}...`);
+      const videoResult = await requestSingleVideo(results.aiPrompt[index].aiPrompt);
+      setGeneratedMedia([videoResult.previewUrl]);
+      setGeneratedMediaPromptIndices([index]);
+      setGeneratedVideoSourceUrls([videoResult.sourceUrl]);
+      setMediaGenerationProgress('');
+    } catch (err: any) {
+      const errorMessage = err?.message || '生成单个视频失败，请重试。';
+      setMediaGenerationError(errorMessage);
+    } finally {
+      setIsGeneratingMedia(false);
+    }
+  };
+
   const buildQumengImageDataUrl = async (url: string, index: number) => {
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d');
@@ -1468,6 +1541,40 @@ ${JSON.stringify(textMatrix, null, 2)}
     return result as { materialId: string; remoteUrl?: string; materialType?: string };
   };
 
+  const uploadVideoToQumeng = async (downloadLink: string) => {
+    const accessToken = localStorage.getItem('qumeng_access_token') || '';
+    const accountId = localStorage.getItem('qumeng_account_id') || '';
+
+    if (!accessToken.trim()) {
+      throw new Error('请先在设置中填写趣盟 Access Token。');
+    }
+
+    if (!accountId.trim()) {
+      throw new Error('请先在设置中填写趣盟账户 ID。');
+    }
+
+    const response = await fetch('/api/qumeng/upload-video', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        downloadLink,
+        accessToken,
+        accountId,
+        materialType: currentQumengVideoSpec.materialType,
+        fileName: `qumeng-video-${Date.now()}.mp4`,
+      }),
+    });
+
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok || !result?.success) {
+      throw new Error(result?.error || '趣盟视频上传失败。');
+    }
+
+    return result as { materialId: string; remoteUrl?: string; materialType?: string };
+  };
+
   const syncSingleImageToQumeng = async (index: number) => {
     if (results?.mode !== 'image') return;
 
@@ -1500,6 +1607,41 @@ ${JSON.stringify(textMatrix, null, 2)}
     }
   };
 
+  const syncSingleVideoToQumeng = async (index: number) => {
+    if (results?.mode !== 'video') return;
+
+    setQumengSyncStates(prev => ({
+      ...prev,
+      [index]: { status: 'syncing' }
+    }));
+
+    try {
+      const downloadLink = generatedVideoSourceUrls[index];
+      if (!downloadLink) {
+        throw new Error('当前视频没有可同步的源地址，请先重新生成。');
+      }
+
+      const result = await uploadVideoToQumeng(downloadLink);
+      setQumengSyncStates(prev => ({
+        ...prev,
+        [index]: {
+          status: 'synced',
+          materialId: result.materialId,
+        }
+      }));
+    } catch (err: any) {
+      const errorMessage = err?.message || '视频同步失败，请稍后重试。';
+      setQumengSyncStates(prev => ({
+        ...prev,
+        [index]: {
+          status: 'failed',
+          error: errorMessage,
+        }
+      }));
+      setQumengSyncSummary(errorMessage);
+    }
+  };
+
   const syncAllImagesToQumeng = async () => {
     if (results?.mode !== 'image' || generatedMedia.length === 0) return;
 
@@ -1512,6 +1654,20 @@ ${JSON.stringify(textMatrix, null, 2)}
 
     setIsBulkSyncingToQumeng(false);
     setQumengSyncSummary('批量同步已执行完成，请查看每张图片卡片上的同步结果。');
+  };
+
+  const syncAllVideosToQumeng = async () => {
+    if (results?.mode !== 'video' || generatedMedia.length === 0) return;
+
+    setIsBulkSyncingToQumeng(true);
+    setQumengSyncSummary(null);
+
+    for (let i = 0; i < generatedMedia.length; i++) {
+      await syncSingleVideoToQumeng(i);
+    }
+
+    setIsBulkSyncingToQumeng(false);
+    setQumengSyncSummary('批量同步已执行完成，请查看每个视频卡片上的同步结果。');
   };
 
   if (hasApiKey === false) {
@@ -1594,7 +1750,7 @@ ${JSON.stringify(textMatrix, null, 2)}
       {isAuthOpen && <Auth onClose={() => setIsAuthOpen(false)} />}
       
       {/* Settings Modal */}
-      {isSettingsOpen && <ModelSettingsModal onClose={() => setIsSettingsOpen(false)} />}
+      {isSettingsOpen && <SettingsModal onClose={() => setIsSettingsOpen(false)} />}
       <main className="max-w-7xl mx-auto px-6 py-8 grid grid-cols-1 lg:grid-cols-12 gap-8">
         {/* Left Column: Upload & Preview */}
         <div className="lg:col-span-4 space-y-6">
@@ -2064,6 +2220,19 @@ ${JSON.stringify(textMatrix, null, 2)}
                                   生成此图片
                                 </button>
                               )}
+                              {results.mode === 'video' && (
+                                <button
+                                  onClick={() => generateSingleVideoFromPrompt(idx)}
+                                  disabled={isGeneratingMedia}
+                                  className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${
+                                    isGeneratingMedia
+                                      ? 'bg-slate-700 text-slate-400 cursor-wait'
+                                      : 'bg-violet-500/20 text-violet-300 hover:bg-violet-500/30'
+                                  }`}
+                                >
+                                  生成此视频
+                                </button>
+                              )}
                               <span className="text-xs font-medium text-slate-500">变体 {idx + 1}</span>
                             </div>
                           </div>
@@ -2162,16 +2331,18 @@ ${JSON.stringify(textMatrix, null, 2)}
                       </div>
                     ) : (
                       <div>
-                        <label className="block text-xs font-medium text-slate-500 mb-1.5">画面比例</label>
-                        <select 
-                          value={selectedAspectRatio}
-                          onChange={(e) => setSelectedAspectRatio(e.target.value as '16:9' | '9:16')}
+                        <label className="block text-xs font-medium text-slate-500 mb-1.5">视频规格</label>
+                        <select
+                          value={selectedVideoSpec}
+                          onChange={(e) => setSelectedVideoSpec(e.target.value as QumengVideoSpecKey)}
                           className="w-full text-sm rounded-lg border border-slate-200 p-2.5 outline-none focus:border-indigo-500 bg-white"
                           disabled={isGeneratingMedia}
                         >
-                          <option value="16:9">横屏 (16:9)</option>
-                          <option value="9:16">竖屏 (9:16)</option>
+                          <option value="VERTICAL_VIDEO">竖版视频 9:16（≤150MB，≤30s，mp4/mov/avi）</option>
                         </select>
+                        <p className="text-[10px] text-slate-500 mt-1">
+                          当前先按趣盟已验证的竖版视频规格生成和同步。
+                        </p>
                       </div>
                     )}
                     
@@ -2353,6 +2524,20 @@ ${JSON.stringify(textMatrix, null, 2)}
                             </button>
                           </>
                         )}
+                        {results.mode === 'video' && (
+                          <button
+                            onClick={syncAllVideosToQumeng}
+                            disabled={isBulkSyncingToQumeng}
+                            className={`flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg transition-colors shadow-sm ${
+                              isBulkSyncingToQumeng
+                                ? 'bg-amber-50 text-amber-500 cursor-wait'
+                                : 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                            }`}
+                          >
+                            {isBulkSyncingToQumeng ? <Loader2 className="w-4 h-4 animate-spin" /> : <Layers className="w-4 h-4" />}
+                            一键同步 4 个视频
+                          </button>
+                        )}
                       </div>
                     </div>
                     {results.mode === 'image' && (
@@ -2370,6 +2555,27 @@ ${JSON.stringify(textMatrix, null, 2)}
                         </div>
                         <p className="mt-2 text-xs text-slate-600">
                           当前按所选趣盟规格生成并同步：{currentQumengImageSpec.label} {currentQumengImageSpec.sizeLabel} / {currentQumengImageSpec.materialType}。
+                        </p>
+                        {qumengSyncSummary && (
+                          <p className="mt-2 text-xs text-amber-700">{qumengSyncSummary}</p>
+                        )}
+                      </div>
+                    )}
+                    {results.mode === 'video' && (
+                      <div className="mb-4 rounded-xl border border-violet-100 bg-violet-50 p-4">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="px-2.5 py-1 rounded-full bg-white text-violet-700 text-xs font-semibold border border-violet-200">
+                            趣盟同步规格
+                          </span>
+                          <span className="px-2.5 py-1 rounded-full bg-white text-slate-700 text-xs font-medium border border-slate-200">
+                            {currentQumengVideoSpec.label} {currentQumengVideoSpec.specLabel}
+                          </span>
+                          <span className="px-2.5 py-1 rounded-full bg-white text-slate-700 text-xs font-medium border border-slate-200">
+                            {currentQumengVideoSpec.materialType}
+                          </span>
+                        </div>
+                        <p className="mt-2 text-xs text-slate-600">
+                          当前按所选趣盟规格生成并同步：{currentQumengVideoSpec.label} / {currentQumengVideoSpec.specLabel} / {currentQumengVideoSpec.materialType}。
                         </p>
                         {qumengSyncSummary && (
                           <p className="mt-2 text-xs text-amber-700">{qumengSyncSummary}</p>
@@ -2426,6 +2632,53 @@ ${JSON.stringify(textMatrix, null, 2)}
                               </button>
                             </div>
                           )}
+                          {results.mode === 'video' && (
+                            <div className="flex items-center justify-between gap-3 border-b border-slate-100 bg-slate-50 px-4 py-3">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className="px-2 py-1 rounded-full bg-white text-slate-700 text-xs font-semibold border border-slate-200">
+                                  {currentQumengVideoSpec.label} {currentQumengVideoSpec.specLabel}
+                                </span>
+                                <span className="px-2 py-1 rounded-full bg-white text-slate-700 text-xs font-medium border border-slate-200">
+                                  {currentQumengVideoSpec.materialType}
+                                </span>
+                                {generatedMediaPromptIndices[idx] !== undefined && (
+                                  <span className="px-2 py-1 rounded-full bg-white text-indigo-700 text-xs font-medium border border-indigo-200">
+                                    来源提示词 {generatedMediaPromptIndices[idx] + 1}
+                                  </span>
+                                )}
+                                <span
+                                  className={`px-2 py-1 rounded-full text-xs font-medium border ${
+                                    qumengSyncStates[idx]?.status === 'synced'
+                                      ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                      : qumengSyncStates[idx]?.status === 'syncing'
+                                        ? 'bg-amber-50 text-amber-700 border-amber-200'
+                                        : qumengSyncStates[idx]?.status === 'failed'
+                                          ? 'bg-red-50 text-red-700 border-red-200'
+                                          : 'bg-slate-100 text-slate-600 border-slate-200'
+                                  }`}
+                                >
+                                  {qumengSyncStates[idx]?.status === 'synced'
+                                    ? '已同步'
+                                    : qumengSyncStates[idx]?.status === 'syncing'
+                                      ? '同步中'
+                                      : qumengSyncStates[idx]?.status === 'failed'
+                                        ? '同步失败'
+                                        : '未同步'}
+                                </span>
+                              </div>
+                              <button
+                                onClick={() => syncSingleVideoToQumeng(idx)}
+                                disabled={qumengSyncStates[idx]?.status === 'syncing' || isBulkSyncingToQumeng}
+                                className={`shrink-0 rounded-lg px-3 py-2 text-xs font-medium transition-colors ${
+                                  qumengSyncStates[idx]?.status === 'syncing' || isBulkSyncingToQumeng
+                                    ? 'bg-emerald-50 text-emerald-400 cursor-wait'
+                                    : 'bg-emerald-600 text-white hover:bg-emerald-700'
+                                }`}
+                              >
+                                {qumengSyncStates[idx]?.status === 'syncing' ? '同步中...' : '同步到趣盟'}
+                              </button>
+                            </div>
+                          )}
                           <div
                             id={`media-container-${idx}`}
                             className={`bg-black relative flex items-center justify-center group ${
@@ -2462,6 +2715,17 @@ ${JSON.stringify(textMatrix, null, 2)}
                             />
                           </div>
                           {results.mode === 'image' && (
+                            <div className="border-t border-slate-100 px-4 py-3 bg-white">
+                              {qumengSyncStates[idx]?.materialId ? (
+                                <p className="text-xs text-emerald-700">素材ID：{qumengSyncStates[idx]?.materialId}</p>
+                              ) : qumengSyncStates[idx]?.error ? (
+                                <p className="text-xs text-red-600">{qumengSyncStates[idx]?.error}</p>
+                              ) : (
+                                <p className="text-xs text-slate-500">同步成功后会在这里显示趣盟素材ID。</p>
+                              )}
+                            </div>
+                          )}
+                          {results.mode === 'video' && (
                             <div className="border-t border-slate-100 px-4 py-3 bg-white">
                               {qumengSyncStates[idx]?.materialId ? (
                                 <p className="text-xs text-emerald-700">素材ID：{qumengSyncStates[idx]?.materialId}</p>

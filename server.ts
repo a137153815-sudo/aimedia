@@ -154,6 +154,92 @@ app.post('/api/qumeng/upload-image', async (req, res) => {
   }
 });
 
+app.post('/api/qumeng/upload-video', async (req, res) => {
+  try {
+    const {
+      downloadLink,
+      accessToken,
+      accountId,
+      materialType = 'VERTICAL_VIDEO',
+      fileName = 'qumeng-video.mp4',
+    } = req.body || {};
+
+    if (!downloadLink || typeof downloadLink !== 'string') {
+      return res.status(400).json({ error: '缺少待上传的视频地址。' });
+    }
+
+    if (!accessToken || typeof accessToken !== 'string') {
+      return res.status(400).json({ error: '请先在设置中填写趣盟 Access Token。' });
+    }
+
+    if (!accountId || typeof accountId !== 'string') {
+      return res.status(400).json({ error: '请先在设置中填写趣盟账户 ID。' });
+    }
+
+    const sourceResponse = await fetch(downloadLink);
+    if (!sourceResponse.ok) {
+      return res.status(400).json({ error: `无法获取待同步视频：${sourceResponse.statusText}` });
+    }
+
+    const contentType = sourceResponse.headers.get('content-type') || 'video/mp4';
+    const buffer = Buffer.from(await sourceResponse.arrayBuffer());
+
+    const uploadUrl = `https://openapi.aiclk.com/openapi/v1/material/upload?account_id=${encodeURIComponent(accountId)}`;
+    const buildFormData = (fieldName: 'material_type' | 'type') => {
+      const formData = new FormData();
+      formData.set('file', new Blob([buffer], { type: contentType }), fileName);
+      formData.set(fieldName, materialType);
+      return formData;
+    };
+
+    let response = await fetch(uploadUrl, {
+      method: 'POST',
+      headers: {
+        OGW_ACCESS_TOKEN: accessToken,
+      },
+      body: buildFormData('material_type'),
+    });
+
+    let result = await response.json();
+
+    if (!response.ok || result?.code !== 200) {
+      const shouldRetryWithType =
+        result?.message?.includes('素材类型解析失败') ||
+        result?.message?.includes('material') ||
+        result?.code === 400;
+
+      if (shouldRetryWithType) {
+        response = await fetch(uploadUrl, {
+          method: 'POST',
+          headers: {
+            OGW_ACCESS_TOKEN: accessToken,
+          },
+          body: buildFormData('type'),
+        });
+        result = await response.json();
+      }
+    }
+
+    if (!response.ok || result?.code !== 200) {
+      return res.status(400).json({
+        error: result?.message || '趣盟视频上传失败',
+        raw: result,
+      });
+    }
+
+    return res.json({
+      success: true,
+      materialId: String(result.data?.id || ''),
+      materialType: result.data?.material_type || materialType,
+      remoteUrl: result.data?.remote_url || '',
+      raw: result,
+    });
+  } catch (error: any) {
+    console.error('Error uploading video to qumeng:', error);
+    return res.status(500).json({ error: error?.message || '趣盟视频上传失败。' });
+  }
+});
+
 app.post('/api/generate-content', async (req, res) => {
   try {
     const { payload, userApiKey, baseUrl, customModel, mode } = req.body;
@@ -489,6 +575,46 @@ app.post('/api/generate-videos', async (req, res) => {
       return res.json({ done: false, taskId: data.data?.task_id || data.task_id, provider: 'kling' });
     }
     
+    if (requestMode === 'tool' && provider === 'seedance') {
+      const base = normalizeProviderBaseUrl(baseUrl, 'https://ark.cn-beijing.volces.com/api/v3');
+      const fetchUrl = `${base}/contents/generations/tasks`;
+      const content: any[] = [
+        {
+          type: 'text',
+          text: payload.prompt,
+        },
+      ];
+
+      if (referenceImageBytes) {
+        content.push({
+          type: 'image_url',
+          image_url: {
+            url: `data:${referenceImageMimeType};base64,${referenceImageBytes}`,
+          },
+          role: 'reference_image',
+        });
+      }
+
+      const ratio = requestedAspectRatio === '9:16' ? '9:16' : '16:9';
+      const duration = requestedResolution === '1080p' ? 11 : 5;
+
+      const seedanceRes = await fetch(fetchUrl, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: customModel || 'doubao-seedance-2-0-260128',
+          content,
+          generate_audio: false,
+          ratio,
+          duration,
+          watermark: false,
+        })
+      });
+      if (!seedanceRes.ok) throw new Error(`Seedance API Error: ${await seedanceRes.text()}`);
+      const data = await seedanceRes.json();
+      return res.json({ done: false, taskId: data.id || data.task_id || data.data?.id || data.data?.task_id, provider: 'seedance' });
+    }
+
     if (requestMode === 'tool' && provider === 'jimeng') {
       const base = normalizeProviderBaseUrl(baseUrl, 'https://api.volcengine.com/api/v1');
       const fetchUrl = base.endsWith('/video_generation') ? base : `${base}/video_generation`;
@@ -580,6 +706,45 @@ app.post('/api/get-video-operation', async (req, res) => {
       return res.json({ done: false, taskId: operationObj.taskId, provider: 'kling' });
     }
     
+    if (requestMode === 'tool' && activeProvider === 'seedance') {
+      const seedanceBase = normalizeProviderBaseUrl(baseUrl, 'https://ark.cn-beijing.volces.com/api/v3');
+      const fetchUrl = `${seedanceBase}/contents/generations/tasks/${operationObj.taskId}`;
+      const seedanceRes = await fetch(fetchUrl, { headers: { 'Authorization': `Bearer ${apiKey}` } });
+      const data = await seedanceRes.json();
+      const status = data.status || data.data?.status || data.task_status || data.data?.task_status;
+      const successStatuses = ['succeeded', 'SUCCEEDED', 'success', 'SUCCESS', 'done', 'DONE', 'finished', 'FINISHED'];
+      const pendingStatuses = ['queued', 'QUEUED', 'running', 'RUNNING', 'processing', 'PROCESSING', 'pending', 'PENDING'];
+      const failedStatuses = ['failed', 'FAIL', 'FAILED', 'error', 'ERROR', 'expired', 'EXPIRED', 'cancelled', 'CANCELLED'];
+      const videoUrl =
+        data.content?.video_url ||
+        data.data?.content?.video_url ||
+        data.content?.file_url ||
+        data.data?.content?.file_url ||
+        data.video_url ||
+        data.data?.video_url ||
+        data.url ||
+        data.data?.url ||
+        data.output?.video_url ||
+        data.data?.output?.video_url ||
+        data.result?.video_url ||
+        data.data?.result?.video_url;
+      console.log('[Seedance status]', JSON.stringify({ status, videoUrl, data }));
+
+      if (successStatuses.includes(status)) {
+        if (!videoUrl) {
+          throw new Error(`Seedance 视频任务已完成，但未返回 video_url。原始状态：${status}`);
+        }
+        return res.json({ done: true, response: { generatedVideos: [{ video: { uri: videoUrl } }] } });
+      }
+      if (failedStatuses.includes(status)) {
+        throw new Error(`Seedance video generation failed: ${data.message || data.error?.message || status}`);
+      }
+      if (pendingStatuses.includes(status) || !status) {
+        return res.json({ done: false, taskId: operationObj.taskId, provider: 'seedance' });
+      }
+      return res.json({ done: false, taskId: operationObj.taskId, provider: 'seedance' });
+    }
+
     if (requestMode === 'tool' && activeProvider === 'jimeng') {
       const jimengBase = normalizeProviderBaseUrl(baseUrl, 'https://api.volcengine.com/api/v1');
       const fetchUrl = `${jimengBase}/video_generation/tasks/${operationObj.taskId}`;

@@ -30,7 +30,7 @@ const TEXT_PROVIDER_PRESETS: Record<ToolTextProvider, ProviderPreset> = {
     label: '豆包',
     baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
     model: 'doubao-1.5-lite-32k',
-    helper: '适合走火山方舟兼容接口，模型名也可替换成你的接入点 ID。',
+    helper: '适合火山方舟兼容接口，模型名也可替换成你的接入点 ID。',
   },
 };
 
@@ -84,11 +84,8 @@ const normalizeVideoProvider = (provider: string | null): ToolVideoProvider =>
 
 const setStoredValue = (key: string, value: string) => {
   const trimmed = value.trim();
-  if (trimmed) {
-    localStorage.setItem(key, trimmed);
-  } else {
-    localStorage.removeItem(key);
-  }
+  if (trimmed) localStorage.setItem(key, trimmed);
+  else localStorage.removeItem(key);
 };
 
 const FieldLabel = ({ children }: { children: React.ReactNode }) => (
@@ -113,11 +110,11 @@ const SectionCard = ({
   </div>
 );
 
-interface ModelSettingsModalProps {
+interface SettingsModalProps {
   onClose: () => void;
 }
 
-export default function ModelSettingsModal({ onClose }: ModelSettingsModalProps) {
+export default function SettingsModal({ onClose }: SettingsModalProps) {
   const [settingsMode, setSettingsMode] = useState<SettingsMode>(() =>
     normalizeSettingsMode(localStorage.getItem('settings_mode'))
   );
@@ -177,6 +174,7 @@ export default function ModelSettingsModal({ onClose }: ModelSettingsModalProps)
       localStorage.getItem('video_model_name') ||
       VIDEO_PROVIDER_PRESETS[normalizeVideoProvider(localStorage.getItem('video_provider'))].model
   );
+
   const [qumengClientId, setQumengClientId] = useState(() => localStorage.getItem('qumeng_client_id') || '');
   const [qumengAccessToken, setQumengAccessToken] = useState(() => localStorage.getItem('qumeng_access_token') || '');
   const [qumengRefreshToken, setQumengRefreshToken] = useState(() => localStorage.getItem('qumeng_refresh_token') || '');
@@ -215,14 +213,12 @@ export default function ModelSettingsModal({ onClose }: ModelSettingsModalProps)
       setStoredValue('text_api_key', geminiApiKey);
       setStoredValue('image_api_key', geminiApiKey);
       setStoredValue('video_api_key', geminiApiKey);
-
       localStorage.removeItem('text_base_url');
       localStorage.removeItem('text_model_name');
       localStorage.removeItem('image_base_url');
       localStorage.removeItem('image_model_name');
       localStorage.removeItem('video_base_url');
       localStorage.removeItem('video_model_name');
-
       localStorage.setItem('video_provider', 'gemini');
       localStorage.setItem('text_model', geminiTextModel);
       localStorage.setItem('image_model', geminiImageModel);
@@ -231,15 +227,12 @@ export default function ModelSettingsModal({ onClose }: ModelSettingsModalProps)
       localStorage.setItem('text_provider', textProvider);
       localStorage.setItem('image_provider', imageProvider);
       localStorage.setItem('video_provider', videoProvider);
-
       setStoredValue('text_api_key', textApiKey);
       setStoredValue('text_base_url', textBaseUrl);
       setStoredValue('text_model_name', textModelName);
-
       setStoredValue('image_api_key', imageApiKey);
       setStoredValue('image_base_url', imageBaseUrl);
       setStoredValue('image_model_name', imageModelName);
-
       setStoredValue('video_api_key', videoApiKey);
       setStoredValue('video_base_url', videoBaseUrl);
       setStoredValue('video_model_name', videoModelName);
@@ -258,20 +251,14 @@ export default function ModelSettingsModal({ onClose }: ModelSettingsModalProps)
       <div className="w-full max-w-3xl overflow-hidden rounded-2xl bg-white shadow-xl">
         <div className="flex items-center justify-between border-b border-slate-100 px-6 py-4">
           <h2 className="text-lg font-semibold text-slate-800">模型设置</h2>
-          <button
-            onClick={onClose}
-            className="text-slate-400 transition-colors hover:text-slate-600"
-            type="button"
-          >
+          <button onClick={onClose} className="text-slate-400 transition-colors hover:text-slate-600" type="button">
             <X className="h-5 w-5" />
           </button>
         </div>
 
         <div className="max-h-[80vh] space-y-6 overflow-y-auto p-6">
           <div>
-            <h3 className="mb-3 border-b border-slate-100 pb-2 text-sm font-semibold text-slate-800">
-              模式切换
-            </h3>
+            <h3 className="mb-3 border-b border-slate-100 pb-2 text-sm font-semibold text-slate-800">模式切换</h3>
             <div className="grid grid-cols-2 gap-3">
               <button
                 type="button"
@@ -283,9 +270,7 @@ export default function ModelSettingsModal({ onClose }: ModelSettingsModalProps)
                 }`}
               >
                 <div className="text-sm font-semibold text-slate-800">Gemini 模式</div>
-                <p className="mt-1 text-xs text-slate-500">
-                  文本、图片、视频都直接走 Gemini 官方模型。
-                </p>
+                <p className="mt-1 text-xs text-slate-500">文本、图片、视频都直接走 Gemini 官方模型。</p>
               </button>
               <button
                 type="button"
@@ -297,9 +282,7 @@ export default function ModelSettingsModal({ onClose }: ModelSettingsModalProps)
                 }`}
               >
                 <div className="text-sm font-semibold text-slate-800">工具模式</div>
-                <p className="mt-1 text-xs text-slate-500">
-                  按供应商切换主流模型，不用再改后台代码。
-                </p>
+                <p className="mt-1 text-xs text-slate-500">按供应商切换主流模型，不用再改后台代码。</p>
               </button>
             </div>
           </div>
@@ -315,9 +298,7 @@ export default function ModelSettingsModal({ onClose }: ModelSettingsModalProps)
                   placeholder="AIzaSy..."
                   className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500"
                 />
-                <p className="mt-1 text-[11px] text-slate-500">
-                  留空时继续使用平台默认 Gemini Key。
-                </p>
+                <p className="mt-1 text-[11px] text-slate-500">留空时继续使用平台默认 Gemini Key。</p>
               </div>
 
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
@@ -397,16 +378,14 @@ export default function ModelSettingsModal({ onClose }: ModelSettingsModalProps)
                       className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none"
                     >
                       <option value="zhipu">智谱</option>
+                      <option value="seedance">豆包 Seedance</option>
                       <option value="jimeng">即梦</option>
                     </select>
                   </div>
                 </div>
               </div>
 
-              <SectionCard
-                icon={<MessageSquare className="h-4 w-4 text-indigo-500" />}
-                title="文本分析与提示词"
-              >
+              <SectionCard icon={<MessageSquare className="h-4 w-4 text-indigo-500" />} title="文本分析与提示词">
                 <div>
                   <FieldLabel>供应商</FieldLabel>
                   <select
@@ -420,7 +399,6 @@ export default function ModelSettingsModal({ onClose }: ModelSettingsModalProps)
                   </select>
                   <p className="mt-1 text-[11px] text-slate-500">{selectedTextPreset.helper}</p>
                 </div>
-
                 <div>
                   <FieldLabel>API Key</FieldLabel>
                   <input
@@ -431,7 +409,6 @@ export default function ModelSettingsModal({ onClose }: ModelSettingsModalProps)
                     className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none"
                   />
                 </div>
-
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                   <div>
                     <FieldLabel>接口地址 (Base URL)</FieldLabel>
@@ -456,10 +433,7 @@ export default function ModelSettingsModal({ onClose }: ModelSettingsModalProps)
                 </div>
               </SectionCard>
 
-              <SectionCard
-                icon={<ImageIcon className="h-4 w-4 text-pink-500" />}
-                title="图片生成"
-              >
+              <SectionCard icon={<ImageIcon className="h-4 w-4 text-pink-500" />} title="图片生成">
                 <div>
                   <FieldLabel>供应商</FieldLabel>
                   <select
@@ -472,7 +446,6 @@ export default function ModelSettingsModal({ onClose }: ModelSettingsModalProps)
                   </select>
                   <p className="mt-1 text-[11px] text-slate-500">{selectedImagePreset.helper}</p>
                 </div>
-
                 <div>
                   <FieldLabel>API Key</FieldLabel>
                   <input
@@ -483,7 +456,6 @@ export default function ModelSettingsModal({ onClose }: ModelSettingsModalProps)
                     className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none"
                   />
                 </div>
-
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                   <div>
                     <FieldLabel>接口地址 (Base URL)</FieldLabel>
@@ -508,10 +480,7 @@ export default function ModelSettingsModal({ onClose }: ModelSettingsModalProps)
                 </div>
               </SectionCard>
 
-              <SectionCard
-                icon={<Video className="h-4 w-4 text-purple-500" />}
-                title="视频生成"
-              >
+              <SectionCard icon={<Video className="h-4 w-4 text-purple-500" />} title="视频生成">
                 <div>
                   <FieldLabel>供应商</FieldLabel>
                   <select
@@ -520,11 +489,11 @@ export default function ModelSettingsModal({ onClose }: ModelSettingsModalProps)
                     className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none"
                   >
                     <option value="zhipu">{VIDEO_PROVIDER_PRESETS.zhipu.label}</option>
+                    <option value="seedance">{VIDEO_PROVIDER_PRESETS.seedance.label}</option>
                     <option value="jimeng">{VIDEO_PROVIDER_PRESETS.jimeng.label}</option>
                   </select>
                   <p className="mt-1 text-[11px] text-slate-500">{selectedVideoPreset.helper}</p>
                 </div>
-
                 <div>
                   <FieldLabel>API Key</FieldLabel>
                   <input
@@ -535,7 +504,6 @@ export default function ModelSettingsModal({ onClose }: ModelSettingsModalProps)
                     className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none"
                   />
                 </div>
-
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                   <div>
                     <FieldLabel>接口地址 (Base URL)</FieldLabel>
@@ -560,10 +528,7 @@ export default function ModelSettingsModal({ onClose }: ModelSettingsModalProps)
                 </div>
               </SectionCard>
 
-              <SectionCard
-                icon={<Layers className="h-4 w-4 text-emerald-500" />}
-                title="趣盟素材同步"
-              >
+              <SectionCard icon={<Layers className="h-4 w-4 text-emerald-500" />} title="趣盟素材同步">
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                   <div>
                     <FieldLabel>App ID / Client ID</FieldLabel>
